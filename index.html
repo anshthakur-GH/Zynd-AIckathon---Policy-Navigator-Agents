@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Document Analyzer | Upload</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="background-elements">
+        <!-- Ruled-paper grid (document ledger feel) -->
+        <div class="bg-grid"></div>
+        <!-- Saffron seal glow — top-left emblem light -->
+        <div class="bg-seal-glow"></div>
+        <!-- Ambient navy fill — bottom-right depth -->
+        <div class="bg-ambient"></div>
+        <!-- Floating document / scroll particles -->
+        <div class="doc-particle"></div>
+        <div class="doc-particle"></div>
+        <div class="doc-particle"></div>
+        <div class="doc-particle"></div>
+        <div class="doc-particle"></div>
+        <div class="doc-particle"></div>
+        <!-- Decorative Ashoka-wheel ring — top-right corner -->
+        <div class="bg-wheel"></div>
+    </div>
+
+    <main class="container">
+        <header class="header branding">
+            <h1><span class="gradient-text">Unfazed</span> - Policy Navigator</h1>
+            <button class="reset-btn nav-reset-btn" id="new-upload-btn">← Analyze Another File</button>
+        </header>
+
+        <div class="upload-wrapper">
+            <div class="upload-card" id="drop-zone">
+                <input type="file" id="file-input" class="file-input" />
+
+                <div class="upload-content" id="upload-content">
+                    <div class="icon-container">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                            class="upload-icon">
+                            <path
+                                d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z"
+                                fill="#1e293b" />
+                            <path d="M12 16V8M12 8L8 12M12 8L16 12" stroke="#38bdf8" stroke-width="2"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </div>
+                    <h3>Drag & Drop your file here</h3>
+                    <p class="subtitle">or</p>
+                    <button class="browse-btn" id="browse-btn">Browse Files</button>
+                    <p class="file-hint">Supports any file type. Secure & private.</p>
+                </div>
+
+                <div class="processing-content hidden" id="processing-content">
+                    <div class="loader-container">
+                        <div class="circular-loader"></div>
+                    </div>
+                    <h3 id="status-text">Uploading File...</h3>
+                    <p class="subtitle" id="file-name-display"></p>
+                </div>
+
+                <div class="success-content hidden" id="success-content">
+                    <div class="icon-container success-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none">
+                            <path
+                                d="M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z"
+                                fill="#1e293b" />
+                            <path d="M8 12L11 15L16 9" stroke="#34d399" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                        </svg>
+                    </div>
+                    <h3>Upload Successful</h3>
+                    <p class="subtitle">Processing your document...</p>
+                </div>
+
+                <div class="result-content hidden" id="result-content">
+                    <div class="result-header">
+                        <div class="result-header-text">
+                            <h3>Document Analyzed Successfully</h3>
+                            <p class="subtitle">Here is the extracted policy information.</p>
+                        </div>
+                        <button class="eligibility-btn" id="eligibility-btn">✦ Eligibility Verification</button>
+                    </div>
+                    <div class="policy-result-container" id="policy-result-container">
+                        <!-- Structured policy data will be injected here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Eligibility Chat Modal -->
+    <div class="chat-overlay hidden" id="chat-overlay">
+        <div class="chat-modal">
+            <div class="chat-header">
+                <div class="chat-header-info">
+                    <div class="chat-avatar">✦</div>
+                    <div>
+                        <h3>Eligibility Verification</h3>
+                        <p class="chat-status" id="chat-status">AI Agent • Online</p>
+                    </div>
+                </div>
+                <button class="chat-close-btn" id="chat-close-btn">✕</button>
+            </div>
+
+            <div class="chat-messages" id="chat-messages">
+                <!-- Messages will be injected here -->
+            </div>
+
+            <div class="chat-typing hidden" id="chat-typing">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+
+            <div class="chat-input-bar" id="chat-input-bar">
+                <input type="text" id="chat-input" class="chat-input" placeholder="Type your answer..."
+                    autocomplete="off" />
+                <button class="chat-send-btn" id="chat-send-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>

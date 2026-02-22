@@ -1,0 +1,879 @@
+document.addEventListener('DOMContentLoaded', () => {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const browseBtn = document.getElementById('browse-btn');
+
+    const uploadContent = document.getElementById('upload-content');
+    const processingContent = document.getElementById('processing-content');
+    const successContent = document.getElementById('success-content');
+    const statusText = document.getElementById('status-text');
+    const fileNameDisplay = document.getElementById('file-name-display');
+    const resultContent = document.getElementById('result-content');
+    const policyResultContainer = document.getElementById('policy-result-container');
+    const newUploadBtn = document.getElementById('new-upload-btn');
+    const mainContainer = document.querySelector('.container');
+
+    let currentSessionId = null;  // shared: set by handleFile, read by openChat
+
+    const WEBHOOK_URL = 'https://test-n8n.zynd.ai/webhook/979cfe28-657f-4314-b806-5d7df0c989c9/pay';
+
+    browseBtn.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) handleFile(e.target.files[0]);
+    });
+
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, preventDefaults, false);
+    });
+
+    function preventDefaults(e) {
+        e.preventDefault();
+        e.stopPropagation();
+    }
+
+    ['dragenter', 'dragover'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.add('drag-over'), false));
+    ['dragleave', 'drop'].forEach(e => dropZone.addEventListener(e, () => dropZone.classList.remove('drag-over'), false));
+
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files.length > 0) handleFile(files[0]);
+    });
+
+    const resetFlow = () => {
+        uploadContent.classList.remove('hidden');
+        processingContent.classList.add('hidden');
+        successContent.classList.add('hidden');
+        resultContent.classList.add('hidden');
+        policyResultContainer.innerHTML = '';
+        fileInput.value = '';
+        mainContainer.classList.remove('result-active');
+        document.body.classList.remove('result-active');
+    };
+
+    if (newUploadBtn) newUploadBtn.addEventListener('click', resetFlow);
+
+    // ─────────────────────────────────────────────────────────────────
+    // KEY FIX: normaliseWebhookResponse
+    // The n8n webhook sometimes returns the raw document-loader object
+    // ({ metadata, pageContent }) instead of the AI-structured policy.
+    // This function detects that case and extracts the structured policy
+    // from whichever shape the response arrives in.
+    // ─────────────────────────────────────────────────────────────────
+    function normaliseWebhookResponse(raw) {
+        if (Array.isArray(raw)) {
+            const firstItem = raw[0];
+            if (firstItem && (firstItem.policy_name || firstItem.session_id)) return firstItem;
+            for (const item of raw) {
+                const found = normaliseWebhookResponse(item);
+                if (found) return found;
+            }
+            return null;
+        }
+
+        if (raw && typeof raw === 'object') {
+            if (raw.policy_name || raw.session_id) return raw;
+
+            if (raw.pageContent && raw.metadata) {
+                console.warn('[WEBHOOK BUG] n8n returned raw document-loader output. Parsing text...');
+                const parsed = extractPolicyFromPageContent(raw.pageContent);
+                // Preserve session_id if it exists anywhere in the wrapper
+                const sid = deepSearchSessionId(raw);
+                if (parsed && sid) parsed.session_id = sid;
+                return parsed;
+            }
+
+            for (const val of Object.values(raw)) {
+                if (val && typeof val === 'object') {
+                    const found = normaliseWebhookResponse(val);
+                    if (found) return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    // New Helper: Exhaustive search for session_id in any object tree
+    function deepSearchSessionId(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+        if (obj.session_id) return obj.session_id;
+
+        if (Array.isArray(obj)) {
+            for (const item of obj) {
+                const found = deepSearchSessionId(item);
+                if (found) return found;
+            }
+        } else {
+            for (const key in obj) {
+                if (key === 'session_id') return obj[key];
+                const found = deepSearchSessionId(obj[key]);
+                if (found) return found;
+            }
+        }
+        return null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // Fallback text parser — used ONLY when n8n returns pageContent
+    // instead of the structured JSON. Extracts as many fields as possible
+    // from the raw document text so the UI degrades gracefully.
+    // ─────────────────────────────────────────────────────────────────
+    function extractPolicyFromPageContent(text) {
+        if (!text) return null;
+        const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+        // Title: first substantial line that isn't a date/URL
+        const possibleTitle = lines.find(l =>
+            l.length > 10 &&
+            !l.match(/^\d{1,2}\/\d{1,2}\/\d{2,4}/) &&
+            !l.startsWith('http') &&
+            !l.match(/^Page \d/i)
+        );
+
+        // Section boundary indexes
+        const idx = (pattern) => lines.findIndex(l => pattern.test(l));
+        const detailsIdx = idx(/^details$/i);
+        const benefitsIdx = idx(/^benefits$/i);
+        const eligIdx = idx(/^eligibility$/i);
+        const appIdx = idx(/application process/i);
+        const queriesIdx = idx(/queries|grievance|complaint|suggestions/i);
+        const docsIdx = idx(/documents required/i);
+
+        // Objective (text between "Details" and "Benefits")
+        let objective = null;
+        if (detailsIdx !== -1 && benefitsIdx !== -1) {
+            objective = lines.slice(detailsIdx + 1, benefitsIdx).join(' ') || null;
+        }
+
+        // Issuing authority from "by the …" in objective
+        let issuingAuthority = null;
+        if (objective) {
+            const m = objective.match(/by\s+the\s+([^.]+)/i);
+            if (m) issuingAuthority = m[1].trim();
+        }
+
+        // Who is it for — looking for "for [group]" or specific beneficiary keywords
+        let whoIsItFor = null;
+        if (objective) {
+            // Try specific "for [target audience]" pattern first
+            const forMatch = objective.match(/for\s+([^.]+)/i);
+            if (forMatch && !forMatch[1].toLowerCase().includes('loans')) {
+                whoIsItFor = forMatch[1].trim();
+            } else {
+                // Bullet point backup
+                const m = objective.match(/([^.]*(?:ward|widow|citizen|resident|applicant|operator|student|youth)[^.]*\.?)/i);
+                if (m) whoIsItFor = m[1].trim();
+            }
+        }
+
+        // Key benefits (lines between "Benefits" and "Eligibility")
+        const keyBenefits = (benefitsIdx !== -1 && eligIdx !== -1)
+            ? lines.slice(benefitsIdx + 1, eligIdx)
+                .filter(l => l.length > 3 && !l.match(/^(offline|online|details|benefits)$/i))
+            : [];
+
+        // Eligibility (bullet lines or lines after Eligibility header)
+        let eligibilityLines = lines
+            .filter(l => /^[•\-*]/.test(l))
+            .map(l => l.replace(/^[•\-*]\s*/, ''));
+
+        if (eligibilityLines.length === 0 && eligIdx !== -1) {
+            // If no bullets, take next 2 lines
+            eligibilityLines = lines.slice(eligIdx + 1, eligIdx + 3).filter(l => l.length > 5);
+        }
+
+        // Required documents (lines after "Documents Required" - handles bullets and numbers)
+        const docsHeaderIdx = lines.findIndex(l => /documents\s+required/i.test(l));
+        let requiredDocs = [];
+        if (docsHeaderIdx !== -1) {
+            requiredDocs = lines
+                .slice(docsHeaderIdx + 1, docsHeaderIdx + 8)
+                .filter(l => /^[•\-*\d]/.test(l) || l.length > 20)
+                .map(l => l.replace(/^[•\-*\d. ]+\s*/, ''))
+                .filter(l => !/https|www/i.test(l));
+        }
+
+        // How to apply (numbered steps)
+        const stepLines = lines
+            .filter(l => /^step \d+:/i.test(l))
+            .map((l, i) => `${i + 1}. ${l.replace(/^step \d+:\s*/i, '')}`);
+        let howToApply = stepLines.length > 0
+            ? stepLines.join('\n')
+            : (appIdx !== -1
+                ? lines
+                    .slice(appIdx + 1, queriesIdx !== -1 ? queriesIdx : (docsHeaderIdx !== -1 ? docsHeaderIdx : undefined))
+                    .filter(l => l.length > 0 && !/^offline$/i.test(l))
+                    .join(' ')
+                : null);
+
+        // Important dates — look for "within X months/days" or date patterns
+        let lastDate = null;
+        const dateMatch = text.match(/within\s+([^.]+(?:month|day|week|announced)[^.]*\.?)/i);
+        if (dateMatch) lastDate = dateMatch[1].replace(/\.$/, '').trim();
+        else {
+            const lastDateLine = lines.find(l => l.toLowerCase().includes('last date') || l.toLowerCase().includes('within'));
+            if (lastDateLine) lastDate = lastDateLine;
+        }
+
+        // Contact info (look for helpline, phone, email)
+        let contact = null;
+        const contactLine = lines.find(l => /helpline|phone|email|contact/i.test(l));
+        if (contactLine) contact = contactLine;
+        else if (queriesIdx !== -1) {
+            const contactLines = lines.slice(queriesIdx + 1, docsHeaderIdx !== -1 ? docsHeaderIdx : undefined)
+                .filter(l => l.length > 10);
+            contact = contactLines.join(' ') || null;
+        }
+
+        return {
+            policy_name: possibleTitle || 'Policy Document',
+            issuing_authority: issuingAuthority,
+            objective: objective,
+            who_is_it_for: whoIsItFor,
+            key_benefits: keyBenefits.length > 0 ? keyBenefits : null,
+            eligibility_summary: eligibilityLines.length > 0 ? eligibilityLines : null,
+            required_documents: requiredDocs.length > 0 ? requiredDocs : null,
+            how_to_apply: howToApply,
+            important_dates: lastDate ? { start_date: null, last_date: lastDate } : null,
+            issuing_authority_contact: contact
+        };
+    }
+
+    function renderPolicyData(data, container) {
+        container.innerHTML = '';
+
+        if (!data) {
+            container.innerHTML = '<p class="policy-text">No data received from the server.</p>';
+            return;
+        }
+
+        if (typeof data === 'string') {
+            try { data = JSON.parse(data); }
+            catch (e) {
+                container.innerHTML = `<p class="policy-text">Raw text: ${data}</p>`;
+                return;
+            }
+        }
+
+        // ── MAIN FIX: normalise before rendering ──
+        let policy = normaliseWebhookResponse(data);
+
+        if (!policy || Object.keys(policy).length === 0) {
+            container.innerHTML = '<p class="policy-text">No structured policy data was extracted from the document.</p>';
+            return;
+        }
+
+        // Debug log (now accurate)
+        console.log('Final policy object for rendering:', JSON.stringify({
+            policy_name: policy.policy_name ?? '(null)',
+            issuing_authority: policy.issuing_authority ?? '(null)',
+            objective: policy.objective ? '✓' : '(null)',
+            who_is_it_for: policy.who_is_it_for ? '✓' : '(null)',
+            key_benefits: Array.isArray(policy.key_benefits) ? `✓ (${policy.key_benefits.length})` : '(null)',
+            eligibility_summary: Array.isArray(policy.eligibility_summary) ? `✓ (${policy.eligibility_summary.length})` : '(null)',
+            required_documents: Array.isArray(policy.required_documents) ? `✓ (${policy.required_documents.length})` : '(null)',
+            how_to_apply: policy.how_to_apply ? '✓' : '(null)',
+            important_dates: policy.important_dates ? '✓' : '(null)',
+            issuing_authority_contact: policy.issuing_authority_contact ? '✓' : '(null)',
+        }));
+
+        // ── Hero Banner ──
+        const hero = document.createElement('div');
+        hero.className = 'policy-hero';
+
+        if (policy.policy_name) {
+            const title = document.createElement('h2');
+            title.className = 'policy-title';
+            title.textContent = policy.policy_name;
+            hero.appendChild(title);
+        }
+        if (policy.issuing_authority) {
+            const auth = document.createElement('div');
+            auth.className = 'policy-authority';
+            auth.textContent = policy.issuing_authority;
+            hero.appendChild(auth);
+        }
+        container.appendChild(hero);
+
+        // ── Sections Grid ──
+        const grid = document.createElement('div');
+        grid.className = 'policy-sections-grid';
+
+        const createSection = (title, content, isList = false, wide = false) => {
+            if (!content) return;
+
+            let listContent = content;
+            if (isList && typeof content === 'string') {
+                listContent = content.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+            }
+            if (isList && (!Array.isArray(listContent) || listContent.length === 0)) return;
+            if (!isList && typeof content !== 'string' && typeof content !== 'number') return;
+
+            const section = document.createElement('div');
+            section.className = wide ? 'policy-section wide' : 'policy-section';
+
+            const heading = document.createElement('h4');
+            heading.textContent = title;
+            section.appendChild(heading);
+
+            if (isList) {
+                const ul = document.createElement('ul');
+                ul.className = 'policy-list';
+                listContent.forEach(item => {
+                    const cleanItem = item.replace(/^[-•*]\s*/, '');
+                    const li = document.createElement('li');
+                    if (cleanItem.startsWith('**') && cleanItem.endsWith('**')) {
+                        li.innerHTML = `<strong>${cleanItem.replace(/\*\*/g, '')}</strong>`;
+                        li.style.listStyle = 'none';
+                        li.style.paddingLeft = '0';
+                        li.style.marginTop = '0.5rem';
+                    } else {
+                        li.textContent = cleanItem;
+                    }
+                    ul.appendChild(li);
+                });
+                section.appendChild(ul);
+            } else {
+                const p = document.createElement('p');
+                p.className = 'policy-text';
+                // Split inline numbered steps ("Step 1: …", "1. …", "2. …") into separate lines
+                let displayText = String(content);
+                displayText = displayText.replace(/\s*(Step \d+[:.])/gi, '\n$1');
+                displayText = displayText.replace(/\s+(\d+\.\s)/g, '\n$1');
+                p.textContent = displayText.trim();
+                section.appendChild(p);
+            }
+
+            grid.appendChild(section);
+        };
+
+        createSection('Objective', policy.objective, false, true);
+        createSection('Key Benefits', policy.key_benefits, true);
+        createSection('Eligibility', policy.eligibility_summary, true);
+        createSection('Required Documents', policy.required_documents, true);
+        createSection('Who Is It For', policy.who_is_it_for);
+        createSection('How To Apply', policy.how_to_apply);
+        createSection('Contact Information', policy.issuing_authority_contact);
+
+        if (policy.important_dates && (policy.important_dates.start_date || policy.important_dates.last_date)) {
+            const dateSection = document.createElement('div');
+            dateSection.className = 'policy-section';
+            const dateHeading = document.createElement('h4');
+            dateHeading.textContent = 'Important Dates';
+            dateSection.appendChild(dateHeading);
+
+            const datesBox = document.createElement('div');
+            datesBox.className = 'policy-dates';
+            if (policy.important_dates.start_date) {
+                datesBox.innerHTML += `<div class="date-item"><span class="date-label">Start Date</span><span class="date-value">${policy.important_dates.start_date}</span></div>`;
+            }
+            if (policy.important_dates.last_date) {
+                datesBox.innerHTML += `<div class="date-item"><span class="date-label">Last Date</span><span class="date-value">${policy.important_dates.last_date}</span></div>`;
+            }
+            dateSection.appendChild(datesBox);
+            grid.appendChild(dateSection);
+        }
+
+        container.appendChild(grid);
+    }
+
+    async function handleFile(file) {
+        uploadContent.classList.add('hidden');
+        processingContent.classList.remove('hidden');
+        fileNameDisplay.textContent = file.name;
+        statusText.textContent = "Processing... Please wait (est. 15s)";
+
+        try {
+            // ── NEW APPROACH: Frontend generates the Session ID ──
+            const generatedSid = typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `sess_${Math.random().toString(36).substring(2, 11)}_${Date.now()}`;
+
+            currentSessionId = generatedSid;
+            console.log('✨ Generated Frontend Session ID:', currentSessionId);
+
+            const formData = new FormData();
+            formData.append('file', file, file.name);
+            formData.append('session_id', currentSessionId); // Backend-required format
+
+            // Route through proxy for better logging and troubleshooting
+            const proxyUploadUrl = `http://localhost:8001/proxy?target=process_doc`;
+
+            const minUxWait = new Promise(resolve => setTimeout(resolve, 1500));
+            const uploadReq = fetch(proxyUploadUrl, {
+                method: 'POST',
+                body: formData
+            });
+            const [response] = await Promise.all([uploadReq, minUxWait]);
+
+            if (!response.ok) throw new Error(`Server returned ${response.status} ${response.statusText}`);
+
+            const responseText = await response.text();
+            console.log("Raw Webhook Response text:", responseText);
+
+            let resultData;
+            try {
+                resultData = JSON.parse(responseText);
+            } catch (err) {
+                console.error("JSON Parsing Error:", err);
+                resultData = { warning: "Webhook responded with invalid JSON format.", raw: responseText };
+            }
+
+            console.log("Parsed Webhook Data:", resultData);
+
+            processingContent.classList.add('hidden');
+            successContent.classList.remove('hidden');
+
+            const policyEntry = normaliseWebhookResponse(resultData);
+
+            // Expose for troubleshooting
+            window.LAST_SESSION_DATA = {
+                id: currentSessionId,
+                source: "Frontend Generated",
+                raw: resultData
+            };
+
+            renderPolicyData(policyEntry || resultData, policyResultContainer);
+
+            setTimeout(() => {
+                successContent.classList.add('hidden');
+                resultContent.classList.remove('hidden');
+                mainContainer.classList.add('result-active');
+                document.body.classList.add('result-active');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }, 1500);
+
+        } catch (error) {
+            console.error('Upload Error:', error);
+            statusText.textContent = "Upload Failed";
+            statusText.style.color = "#f43f5e";
+            fileNameDisplay.textContent = "Please try again. " + error.message;
+
+            setTimeout(() => {
+                resetFlow();
+                statusText.style.color = "";
+            }, 3000);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Eligibility Chat Logic
+    // ─────────────────────────────────────────────────────────
+    const ELIGIBILITY_WEBHOOK = 'http://localhost:8001/proxy?target=eligibility';
+    const OTHER_POLICIES_WEBHOOK = 'http://localhost:8001/proxy?target=other_policies';
+
+    const chatOverlay = document.getElementById('chat-overlay');
+    const chatMessages = document.getElementById('chat-messages');
+    const chatTyping = document.getElementById('chat-typing');
+    const chatInput = document.getElementById('chat-input');
+    const chatSendBtn = document.getElementById('chat-send-btn');
+    const chatCloseBtn = document.getElementById('chat-close-btn');
+    const chatStatus = document.getElementById('chat-status');
+    const eligibilityBtn = document.getElementById('eligibility-btn');
+    const chatInputBar = document.getElementById('chat-input-bar');
+
+    let chatActive = false;
+
+    function appendMessage(text, sender) {
+        const wrapper = document.createElement('div');
+        wrapper.className = `chat-message ${sender}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'msg-avatar';
+        avatar.textContent = sender === 'bot' ? '✦' : 'U';
+
+        const bubble = document.createElement('div');
+        bubble.className = 'msg-bubble';
+        bubble.textContent = text;
+
+        wrapper.appendChild(avatar);
+        wrapper.appendChild(bubble);
+        chatMessages.appendChild(wrapper);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function setTyping(visible) {
+        chatTyping.classList.toggle('hidden', !visible);
+        if (visible) chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function setInputEnabled(enabled) {
+        chatInput.disabled = !enabled;
+        chatSendBtn.disabled = !enabled;
+        if (enabled) chatInput.focus();
+    }
+
+    function extractQuestion(data) {
+        if (!data) return null;
+        if (typeof data === 'string' && data.trim().length > 0) return data.trim();
+        if (Array.isArray(data) && data.length > 0) {
+            const item = data[0];
+            if (typeof item === 'string') return item.trim();
+            if (item && typeof item === 'object') {
+                if (item.status === 'eligible' || item.status === 'not_eligible' ||
+                    item.status === 'complete' || item.status === 'done') return null;
+
+                return (item.question ?? item.message ?? item.text ??
+                    item.next_question ?? item.output ?? item.response ??
+                    Object.values(item).find(v => typeof v === 'string' && v.trim().length > 0) ?? null);
+            }
+        }
+        if (data && typeof data === 'object' && !Array.isArray(data)) {
+            if (data.done === true || data.finished === true ||
+                data.status === 'complete' || data.status === 'done' ||
+                data.status === 'eligible' || data.status === 'not_eligible') return null;
+            return (data.question ?? data.message ?? data.text ??
+                data.next_question ?? data.output ?? data.response ??
+                Object.values(data).find(v => typeof v === 'string' && v.trim().length > 0) ?? null);
+        }
+        return null;
+    }
+
+    // New Helper: Exhaustive search for eligibility status in any object tree
+    function deepSearchEligibilityResult(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+
+        // Check if current level is the result
+        if (obj.status && (obj.status === 'eligible' || obj.status === 'not_eligible')) {
+            return obj;
+        }
+
+        if (Array.isArray(obj)) {
+            for (const item of obj) {
+                const found = deepSearchEligibilityResult(item);
+                if (found) return found;
+            }
+        } else {
+            for (const [key, val] of Object.entries(obj)) {
+                // If it's a string, try to parse it (it might be stringified JSON from agent)
+                if (typeof val === 'string' && val.trim().startsWith('{')) {
+                    try {
+                        const parsed = JSON.parse(val);
+                        const found = deepSearchEligibilityResult(parsed);
+                        if (found) return found;
+                    } catch (e) { }
+                }
+
+                if (val && typeof val === 'object') {
+                    const found = deepSearchEligibilityResult(val);
+                    if (found) return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    async function processAgentResponse(responseText) {
+        if (!responseText || ['', '{}', '[]'].includes(responseText.trim())) {
+            endChat(); return;
+        }
+
+        let data;
+        try {
+            // 1. Initial cleanup of markdown blocks
+            const cleanedText = responseText.replace(/```json\n?|```/g, '').trim();
+            let parsed;
+
+            try {
+                parsed = JSON.parse(cleanedText);
+            } catch (e) {
+                // 2. If direct parse fails, try extracting JSON block from any text
+                const jsonMatch = cleanedText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+                if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+                else throw e;
+            }
+
+            // 3. Deep search for the actual eligibility result object
+            data = deepSearchEligibilityResult(parsed) || parsed;
+
+        } catch (e) {
+            chatStatus.textContent = 'AI Agent • Online';
+            appendMessage(responseText.trim(), 'bot');
+            setInputEnabled(true);
+            return;
+        }
+
+        const isEligibilityResult = data && typeof data === 'object' && !Array.isArray(data) &&
+            (data.status === 'eligible' || data.status === 'not_eligible' || 'other_matching_schemes' in data);
+
+        if (isEligibilityResult) {
+            renderEligibilityResult(data);
+            endChat();
+            return;
+        }
+
+        const nextQuestion = extractQuestion(data);
+        if (!nextQuestion || nextQuestion.trim() === '') {
+            endChat();
+        } else {
+            chatStatus.textContent = 'AI Agent • Online';
+            appendMessage(nextQuestion.trim(), 'bot');
+            setInputEnabled(true);
+        }
+    }
+
+    async function openChat() {
+        chatMessages.innerHTML = '';
+        chatActive = true;
+        chatStatus.textContent = 'AI Agent • Connecting...';
+        setInputEnabled(false);
+        setTyping(true);
+        if (chatInputBar) chatInputBar.classList.remove('hidden');
+        chatOverlay.classList.remove('hidden');
+
+        try {
+            const response = await fetch(ELIGIBILITY_WEBHOOK, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId })
+            });
+
+            setTyping(false);
+            if (!response.ok) throw new Error(`Webhook error: ${response.status}`);
+
+            const responseText = await response.text();
+            await processAgentResponse(responseText);
+
+        } catch (err) {
+            console.error('Eligibility init error:', err);
+            setTyping(false);
+            chatStatus.textContent = 'AI Agent • Error';
+            appendMessage('Sorry, could not connect to the agent. Please try again.', 'bot');
+            setInputEnabled(true);
+        }
+    }
+
+    function closeChat() {
+        chatOverlay.classList.add('hidden');
+        chatMessages.innerHTML = '';
+        chatActive = false;
+        setInputEnabled(false);
+    }
+
+    async function sendChatAnswer(answer) {
+        if (!answer.trim() || !chatActive) return;
+
+        appendMessage(answer, 'user');
+        setInputEnabled(false);
+        setTyping(true);
+        chatStatus.textContent = 'AI Agent • Thinking...';
+
+        try {
+            const response = await fetch(ELIGIBILITY_WEBHOOK, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId, answer: answer.trim() })
+            });
+
+            setTyping(false);
+
+            if (response.status === 204 ||
+                (response.status === 200 && response.headers.get('content-length') === '0')) {
+                endChat(); return;
+            }
+            if (!response.ok) throw new Error(`Webhook error: ${response.status}`);
+
+            const responseText = await response.text();
+            await processAgentResponse(responseText);
+
+        } catch (err) {
+            console.error('Eligibility chat error:', err);
+            setTyping(false);
+            chatStatus.textContent = 'AI Agent • Error';
+            appendMessage('Sorry, something went wrong connecting to the agent. Please try again.', 'bot');
+            setInputEnabled(true);
+        }
+    }
+
+    function renderEligibilityResult(data) {
+        const card = document.createElement('div');
+        card.className = 'eligibility-result-card';
+
+        if (data.status) {
+            const isEligible = data.status === 'eligible';
+
+            const badge = document.createElement('div');
+            badge.className = `eligibility-badge ${isEligible ? 'eligible' : 'not-eligible'}`;
+            badge.textContent = isEligible ? '✓ Eligible' : '✗ Not Eligible';
+            card.appendChild(badge);
+
+            if (data.summary) {
+                const summary = document.createElement('p');
+                summary.className = 'eligibility-summary';
+                summary.textContent = data.summary;
+                card.appendChild(summary);
+            }
+
+            if (data.matched_criteria?.length > 0) {
+                const section = document.createElement('div');
+                section.className = 'eligibility-section';
+                section.innerHTML = '<span class="criteria-label met">✓ Criteria Met</span>';
+                const ul = document.createElement('ul');
+                data.matched_criteria.forEach(c => {
+                    const li = document.createElement('li'); li.textContent = c; ul.appendChild(li);
+                });
+                section.appendChild(ul);
+                card.appendChild(section);
+            }
+
+            if (data.failed_criteria?.length > 0) {
+                const section = document.createElement('div');
+                section.className = 'eligibility-section';
+                section.innerHTML = '<span class="criteria-label missed">✗ Criteria Not Met</span>';
+                const ul = document.createElement('ul');
+                data.failed_criteria.forEach(c => {
+                    const li = document.createElement('li'); li.textContent = c; ul.appendChild(li);
+                });
+                section.appendChild(ul);
+                card.appendChild(section);
+            }
+        }
+
+        if (data.other_matching_schemes?.length > 0) {
+            const section = document.createElement('div');
+            section.className = 'eligibility-section';
+            section.innerHTML = '<span class="criteria-label schemes">💡 You May Also Qualify For</span>';
+            const ul = document.createElement('ul');
+            data.other_matching_schemes.forEach(s => {
+                const li = document.createElement('li');
+                li.innerHTML = `<strong>${s.scheme_name}</strong>${s.why_relevant ? `<br><span class='scheme-reason'>${s.why_relevant}</span>` : ''}`;
+                ul.appendChild(li);
+            });
+            section.appendChild(ul);
+            card.appendChild(section);
+        }
+
+        chatMessages.appendChild(card);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function endChat() {
+        chatActive = false;
+        chatStatus.textContent = 'AI Agent • Session Complete';
+        if (chatInputBar) chatInputBar.classList.add('hidden');
+
+        const doneEl = document.createElement('div');
+        doneEl.className = 'chat-completion-notice';
+        doneEl.innerHTML = `
+            <div class="completion-divider"></div>
+            <p class="completion-text">✓ Verification process complete. Thank you!</p>
+            <div class="chat-completion-actions">
+                <button class="btn-other-policies" id="btn-other-policies">
+                    View other Eligible Policies
+                </button>
+            </div>
+        `;
+        chatMessages.appendChild(doneEl);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+        setInputEnabled(false);
+
+        // Add event listener to the newly created button
+        const otherBtn = doneEl.querySelector('#btn-other-policies');
+        if (otherBtn) otherBtn.addEventListener('click', fetchOtherPolicies);
+    }
+
+    async function fetchOtherPolicies() {
+        const otherBtn = document.getElementById('btn-other-policies');
+        if (otherBtn) {
+            otherBtn.disabled = true;
+            otherBtn.textContent = 'Finding policies...';
+        }
+
+        try {
+            const response = await fetch(OTHER_POLICIES_WEBHOOK, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId })
+            });
+
+            if (!response.ok) throw new Error('Discovery error');
+            const responseText = await response.text();
+
+            let data;
+            try {
+                const cleanJson = responseText.replace(/```json\n?|```/g, '').trim();
+                const jsonMatch = cleanJson.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+                data = JSON.parse(jsonMatch ? jsonMatch[0] : cleanJson);
+
+                // Deep search/unmask if it's nested
+                if (data && typeof data === 'object') {
+                    const found = deepSearchEligibilityResult(data);
+                    if (found) data = found;
+                }
+            } catch (e) {
+                data = responseText;
+            }
+
+            const resultMsg = document.createElement('div');
+            resultMsg.className = 'chat-message bot discovery-result';
+
+            let contentHtml = '';
+            if (Array.isArray(data) || (data && typeof data === 'object')) {
+                const items = Array.isArray(data) ? data : (data.policies || data.schemes || [data]);
+                contentHtml = `
+                    <h4>Recommended Schemes</h4>
+                    <div class="discovery-cards-container">
+                        ${items.map(item => `
+                            <div class="discovery-card">
+                                <div class="discovery-card-icon">✦</div>
+                                <div class="discovery-card-body">
+                                    <div class="discovery-card-name">${item.name || item.title || 'Relevant Scheme'}</div>
+                                    <div class="discovery-card-desc">${item.description || item.summary || item.details || 'Found based on your profile.'}</div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            } else {
+                contentHtml = `
+                    <h4>Other Potential Schemes</h4>
+                    <p>${responseText.length > 800 ? responseText.slice(0, 800) + '...' : responseText}</p>
+                `;
+                contentHtml += `
+                <div style="margin-top: 1rem; font-size: 0.8rem; color: hsl(var(--primary)); opacity: 0.8">
+                    Please check your dashboard for full enrollment details.
+                </div>
+            `;
+            }
+
+            resultMsg.innerHTML = `
+                <div class="msg-avatar">✦</div>
+                <div class="msg-content">${contentHtml}</div>
+            `;
+
+            chatMessages.appendChild(resultMsg);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            if (otherBtn) {
+                otherBtn.textContent = 'Discovery Complete';
+                otherBtn.style.opacity = '0.5';
+            }
+
+        } catch (err) {
+            console.error('Other policies error:', err);
+            appendMessage('Unable to fetch other policies at this time.', 'bot');
+            if (otherBtn) {
+                otherBtn.disabled = false;
+                otherBtn.textContent = 'View other Eligible Policies';
+            }
+        }
+    }
+
+    if (eligibilityBtn) eligibilityBtn.addEventListener('click', openChat);
+    if (chatCloseBtn) chatCloseBtn.addEventListener('click', closeChat);
+
+    chatOverlay.addEventListener('click', (e) => { if (e.target === chatOverlay) closeChat(); });
+
+    chatSendBtn.addEventListener('click', () => {
+        const val = chatInput.value.trim();
+        if (val) { chatInput.value = ''; sendChatAnswer(val); }
+    });
+
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const val = chatInput.value.trim();
+            if (val) { chatInput.value = ''; sendChatAnswer(val); }
+        }
+    });
+});
