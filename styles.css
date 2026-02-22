@@ -1210,6 +1210,12 @@ body.result-active .nav-reset-btn {
     border: 1px solid hsl(0 60% 40% / 0.4);
 }
 
+.eligibility-badge.partially-eligible {
+    background: hsl(38 60% 20% / 0.6);
+    color: hsl(38 95% 70%);
+    border: 1px solid hsl(38 60% 40% / 0.4);
+}
+
 .eligibility-summary {
     font-size: 0.97rem;
     line-height: 1.6;
@@ -1241,6 +1247,11 @@ body.result-active .nav-reset-btn {
 .criteria-label.missed {
     background: hsl(0 60% 20% / 0.5);
     color: hsl(0 80% 70%);
+}
+
+.criteria-label.unverified {
+    background: hsl(210 60% 20% / 0.5);
+    color: hsl(210 80% 70%);
 }
 
 .criteria-label.schemes {

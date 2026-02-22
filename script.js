@@ -511,7 +511,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const item = data[0];
             if (typeof item === 'string') return item.trim();
             if (item && typeof item === 'object') {
-                if (item.status === 'eligible' || item.status === 'not_eligible' ||
+                if (item.status === 'eligible' || item.status === 'not_eligible' || item.status === 'partially_eligible' ||
                     item.status === 'complete' || item.status === 'done') return null;
 
                 return (item.question ?? item.message ?? item.text ??
@@ -522,7 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (data && typeof data === 'object' && !Array.isArray(data)) {
             if (data.done === true || data.finished === true ||
                 data.status === 'complete' || data.status === 'done' ||
-                data.status === 'eligible' || data.status === 'not_eligible') return null;
+                data.status === 'eligible' || data.status === 'not_eligible' || data.status === 'partially_eligible') return null;
             return (data.question ?? data.message ?? data.text ??
                 data.next_question ?? data.output ?? data.response ??
                 Object.values(data).find(v => typeof v === 'string' && v.trim().length > 0) ?? null);
@@ -535,7 +535,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!obj || typeof obj !== 'object') return null;
 
         // Check if current level is the result
-        if (obj.status && (obj.status === 'eligible' || obj.status === 'not_eligible')) {
+        const s = obj.status?.toLowerCase();
+        if (s === 'eligible' || s === 'not_eligible' || s === 'partially_eligible') {
             return obj;
         }
 
@@ -545,16 +546,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (found) return found;
             }
         } else {
-            for (const [key, val] of Object.entries(obj)) {
-                // If it's a string, try to parse it (it might be stringified JSON from agent)
-                if (typeof val === 'string' && val.trim().startsWith('{')) {
+            // Prioritise keys that look like content
+            const priorityKeys = ['output', 'message', 'data', 'json', 'result'];
+            const sortedKeys = Object.keys(obj).sort((a, b) => priorityKeys.indexOf(b) - priorityKeys.indexOf(a));
+
+            for (const key of sortedKeys) {
+                const val = obj[key];
+                if (typeof val === 'string' && (val.trim().startsWith('{') || val.trim().startsWith('['))) {
                     try {
-                        const parsed = JSON.parse(val);
+                        const parsed = JSON.parse(val.replace(/```json\n?|```/g, '').trim());
                         const found = deepSearchEligibilityResult(parsed);
                         if (found) return found;
                     } catch (e) { }
                 }
-
                 if (val && typeof val === 'object') {
                     const found = deepSearchEligibilityResult(val);
                     if (found) return found;
@@ -569,33 +573,35 @@ document.addEventListener('DOMContentLoaded', () => {
             endChat(); return;
         }
 
-        let data;
+        let data = null;
+        let parsed = null;
+
+        // Try direct parse first
         try {
-            // 1. Initial cleanup of markdown blocks
-            const cleanedText = responseText.replace(/```json\n?|```/g, '').trim();
-            let parsed;
-
-            try {
-                parsed = JSON.parse(cleanedText);
-            } catch (e) {
-                // 2. If direct parse fails, try extracting JSON block from any text
-                const jsonMatch = cleanedText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-                if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
-                else throw e;
-            }
-
-            // 3. Deep search for the actual eligibility result object
-            data = deepSearchEligibilityResult(parsed) || parsed;
-
+            const clean = responseText.replace(/```json\n?|```/g, '').trim();
+            parsed = JSON.parse(clean);
         } catch (e) {
-            chatStatus.textContent = 'AI Agent • Online';
-            appendMessage(responseText.trim(), 'bot');
-            setInputEnabled(true);
-            return;
+            // Try to extract JSON blocks
+            const blocks = responseText.match(/\{[\s\S]*\}|\[[\s\S]*\]/g);
+            if (blocks) {
+                for (const b of blocks) {
+                    try {
+                        parsed = JSON.parse(b);
+                        const found = deepSearchEligibilityResult(parsed);
+                        if (found) { data = found; break; }
+                    } catch (err) { }
+                }
+            }
         }
 
+        // If parsed but not deep-searched yet
+        if (parsed && !data) {
+            data = deepSearchEligibilityResult(parsed) || parsed;
+        }
+
+        // Final check: is it an eligibility result?
         const isEligibilityResult = data && typeof data === 'object' && !Array.isArray(data) &&
-            (data.status === 'eligible' || data.status === 'not_eligible' || 'other_matching_schemes' in data);
+            (data.status === 'eligible' || data.status === 'not_eligible' || data.status === 'partially_eligible' || 'other_matching_schemes' in data);
 
         if (isEligibilityResult) {
             renderEligibilityResult(data);
@@ -603,7 +609,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const nextQuestion = extractQuestion(data);
+        // Otherwise handle as a normal message/question
+        const nextQuestion = extractQuestion(data || responseText);
         if (!nextQuestion || nextQuestion.trim() === '') {
             endChat();
         } else {
@@ -691,11 +698,13 @@ document.addEventListener('DOMContentLoaded', () => {
         card.className = 'eligibility-result-card';
 
         if (data.status) {
-            const isEligible = data.status === 'eligible';
+            const status = data.status;
+            const isEligible = status === 'eligible';
+            const isPartial = status === 'partially_eligible';
 
             const badge = document.createElement('div');
-            badge.className = `eligibility-badge ${isEligible ? 'eligible' : 'not-eligible'}`;
-            badge.textContent = isEligible ? '✓ Eligible' : '✗ Not Eligible';
+            badge.className = `eligibility-badge ${isEligible ? 'eligible' : (isPartial ? 'partially-eligible' : 'not-eligible')}`;
+            badge.textContent = isEligible ? '✓ Eligible' : (isPartial ? '⚠ Partially Eligible' : '✗ Not Eligible');
             card.appendChild(badge);
 
             if (data.summary) {
@@ -728,6 +737,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 section.appendChild(ul);
                 card.appendChild(section);
             }
+
+            if (data.unverified_criteria?.length > 0) {
+                const section = document.createElement('div');
+                section.className = 'eligibility-section';
+                section.innerHTML = '<span class="criteria-label unverified">? Pending Verification</span>';
+                const ul = document.createElement('ul');
+                data.unverified_criteria.forEach(c => {
+                    const li = document.createElement('li'); li.textContent = c; ul.appendChild(li);
+                });
+                section.appendChild(ul);
+                card.appendChild(section);
+            }
         }
 
         if (data.other_matching_schemes?.length > 0) {
@@ -744,7 +765,15 @@ document.addEventListener('DOMContentLoaded', () => {
             card.appendChild(section);
         }
 
-        chatMessages.appendChild(card);
+        const msgContainer = document.createElement('div');
+        msgContainer.className = 'chat-message bot';
+        msgContainer.innerHTML = `
+            <div class="msg-avatar">✦</div>
+            <div class="msg-content"></div>
+        `;
+        msgContainer.querySelector('.msg-content').appendChild(card);
+
+        chatMessages.appendChild(msgContainer);
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
@@ -752,6 +781,10 @@ document.addEventListener('DOMContentLoaded', () => {
         chatActive = false;
         chatStatus.textContent = 'AI Agent • Session Complete';
         if (chatInputBar) chatInputBar.classList.add('hidden');
+        if (chatTyping) chatTyping.classList.add('hidden');
+
+        // Check if notice already exists to avoid duplicates
+        if (document.getElementById('btn-other-policies')) return;
 
         const doneEl = document.createElement('div');
         doneEl.className = 'chat-completion-notice';
@@ -760,7 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <p class="completion-text">✓ Verification process complete. Thank you!</p>
             <div class="chat-completion-actions">
                 <button class="btn-other-policies" id="btn-other-policies">
-                    View other Eligible Policies
+                    View other Recommended Policies
                 </button>
             </div>
         `;
