@@ -289,7 +289,8 @@ body.result-active {
 /* When result is active, expand container to full width */
 .container.result-active {
     max-width: 100%;
-    padding: 2rem 3rem;
+    padding: 0;
+    margin-top: 5rem;
     align-items: stretch;
 }
 
@@ -502,6 +503,29 @@ body.result-active .nav-reset-btn {
     flex: 1;
     display: flex;
     justify-content: center;
+}
+
+/* ── Result Active Transitions ── */
+body.result-active .hero-left {
+    display: none;
+}
+
+body.result-active .hero-layout-grid {
+    display: block;
+    /* Switch to block for simpler full-width flow */
+    max-width: 100%;
+    width: 100%;
+    padding: 0 5rem;
+    margin-top: 4rem;
+    gap: 0;
+}
+
+body.result-active .hero-center-upload {
+    max-width: 100%;
+}
+
+body.result-active .upload-wrapper {
+    max-width: 100%;
 }
 
 .hero-tag-pill {
