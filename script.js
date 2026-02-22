@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const mainContainer = document.querySelector('.container');
 
     let currentSessionId = null;  // shared: set by handleFile, read by openChat
+    let discoveredPolicies = [];  // Store discovery results for detail view
 
     const WEBHOOK_URL = 'https://test-n8n.zynd.ai/webhook/979cfe28-657f-4314-b806-5d7df0c989c9/pay';
 
@@ -810,14 +811,16 @@ document.addEventListener('DOMContentLoaded', () => {
             let contentHtml = '';
             if (Array.isArray(data) || (data && typeof data === 'object')) {
                 const items = Array.isArray(data) ? data : (data.policies || data.schemes || [data]);
+                discoveredPolicies = items; // Store for modal access
+
                 contentHtml = `
                     <h4>Recommended Schemes</h4>
                     <div class="discovery-cards-container">
-                        ${items.map(item => `
-                            <div class="discovery-card">
+                        ${items.map((item, idx) => `
+                            <div class="discovery-card" onclick="window.showSchemeDetails(${idx})">
                                 <div class="discovery-card-icon">✦</div>
                                 <div class="discovery-card-body">
-                                    <div class="discovery-card-name">${item.name || item.title || 'Relevant Scheme'}</div>
+                                    <div class="discovery-card-name">${item.name || item.scheme_name || item.title || 'Relevant Scheme'}</div>
                                     <div class="discovery-card-desc">${item.description || item.summary || item.details || 'Found based on your profile.'}</div>
                                 </div>
                             </div>
@@ -857,6 +860,77 @@ document.addEventListener('DOMContentLoaded', () => {
                 otherBtn.textContent = 'View other Eligible Policies';
             }
         }
+    }
+
+    // ── Scheme Detail Modal Logic ──
+    const schemeOverlay = document.getElementById('scheme-overlay');
+    const schemeContent = document.getElementById('scheme-detail-content');
+    const schemeTitle = document.getElementById('scheme-detail-title');
+    const schemeCloseBtn = document.getElementById('scheme-close-btn');
+    const shareBtn = document.getElementById('share-scheme-btn');
+
+    window.showSchemeDetails = function (index) {
+        const policy = discoveredPolicies[index];
+        if (!policy) return;
+
+        schemeTitle.textContent = policy.name || policy.scheme_name || policy.title || 'Scheme Details';
+
+        // Define fields to show
+        const fields = [
+            { label: 'Objective', key: ['objective', 'description', 'summary'] },
+            { label: 'Who is it for', key: ['who_is_it_for', 'eligibility', 'target_group'] },
+            { label: 'Key Benefits', key: ['key_benefits', 'benefits', 'amount'] },
+            { label: 'How to Apply', key: ['how_to_apply', 'application_process', 'process'] },
+            { label: 'Important Dates', key: ['important_dates', 'dates', 'last_date'] }
+        ];
+
+        let html = '';
+        fields.forEach(f => {
+            const val = f.key.map(k => policy[k]).find(v => !!v);
+            if (val) {
+                html += `
+                    <div class="detail-section">
+                        <div class="detail-label">${f.label}</div>
+                        <div class="detail-value">${Array.isArray(val) ? val.join('<br>') : val}</div>
+                    </div>
+                `;
+            }
+        });
+
+        schemeContent.innerHTML = html || '<p class="detail-value">Detailed information is available on the official portal.</p>';
+        schemeOverlay.classList.remove('hidden');
+
+        // Store current index for sharing
+        shareBtn.setAttribute('data-index', index);
+    };
+
+    function closeSchemeModal() {
+        schemeOverlay.classList.add('hidden');
+    }
+
+    if (schemeCloseBtn) schemeCloseBtn.addEventListener('click', closeSchemeModal);
+    schemeOverlay.addEventListener('click', (e) => { if (e.target === schemeOverlay) closeSchemeModal(); });
+
+    if (shareBtn) {
+        shareBtn.addEventListener('click', () => {
+            const idx = shareBtn.getAttribute('data-index');
+            const policy = discoveredPolicies[idx];
+            if (!policy) return;
+
+            const name = policy.name || policy.scheme_name || 'Scheme';
+            const text = `Check out this policy: ${name}\n\nDetails found using Unfazed Policy Navigator.`;
+
+            // Try WhatsApp share
+            const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+            window.open(whatsappUrl, '_blank');
+
+            // Fallback: Copy to clipboard
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = shareBtn.innerHTML;
+                shareBtn.textContent = '✓ Link Copied!';
+                setTimeout(() => { shareBtn.innerHTML = originalText; }, 2000);
+            });
+        });
     }
 
     if (eligibilityBtn) eligibilityBtn.addEventListener('click', openChat);
