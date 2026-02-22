@@ -398,7 +398,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('session_id', currentSessionId); // Backend-required format
 
             // Route through proxy for better logging and troubleshooting
-            const proxyUploadUrl = `http://localhost:8001/proxy?target=process_doc`;
+            const proxyUploadUrl = `/proxy?target=process_doc`;
 
             const minUxWait = new Promise(resolve => setTimeout(resolve, 1500));
             const uploadReq = fetch(proxyUploadUrl, {
