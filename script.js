@@ -844,25 +844,37 @@ document.addEventListener('DOMContentLoaded', () => {
             let contentHtml = '';
             if (Array.isArray(data) || (data && typeof data === 'object')) {
                 const items = Array.isArray(data) ? data : (data.policies || data.schemes || [data]);
-                discoveredPolicies = items; // Store for modal access
 
-                contentHtml = `
-                    <h4>Recommended Schemes</h4>
-                    <div class="discovery-cards-container">
-                        ${items.map((item, idx) => `
-                            <div class="discovery-card" onclick="window.showSchemeDetails(${idx})">
-                                <div class="discovery-card-icon">✦</div>
-                                <div class="discovery-card-body">
-                                    <div class="discovery-card-name">${item.name || item.scheme_name || item.title || 'Relevant Scheme'}</div>
-                                    <div class="discovery-card-desc">${item.description || item.summary || item.details || 'Found based on your profile.'}</div>
+                // Filter for items that actually have content (not just the generic placeholders)
+                const validItems = items.filter(item => {
+                    const name = item.name || item.scheme_name || item.title;
+                    return name && name !== 'Relevant Scheme';
+                });
+
+                if (validItems.length > 0) {
+                    discoveredPolicies = validItems; // Store for modal access
+                    contentHtml = `
+                        <div class="discovery-cards-container">
+                            ${validItems.map((item, idx) => `
+                                <div class="discovery-card" onclick="window.showSchemeDetails(${idx})">
+                                    <div class="discovery-card-icon">✦</div>
+                                    <div class="discovery-card-body">
+                                        <div class="discovery-card-name">${item.name || item.scheme_name || item.title}</div>
+                                        <div class="discovery-card-desc">${item.description || item.summary || item.details || 'Found based on your profile.'}</div>
+                                    </div>
                                 </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    contentHtml = `
+                        <div class="chat-notice-simple">
+                            <p>No additional eligible policies found for your profile at this time.</p>
+                        </div>
+                    `;
+                }
             } else {
                 contentHtml = `
-                    <h4>Other Potential Schemes</h4>
                     <p>${responseText.length > 800 ? responseText.slice(0, 800) + '...' : responseText}</p>
                 `;
                 contentHtml += `

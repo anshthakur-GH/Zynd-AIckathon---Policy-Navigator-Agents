@@ -1494,3 +1494,14 @@ body.result-active .nav-reset-btn {
     margin: 1rem 0;
     font-style: italic;
 }
+
+.chat-notice-simple {
+    padding: 1.25rem;
+    color: hsl(var(--muted-foreground));
+    font-size: 0.9rem;
+    text-align: center;
+    border: 1px dashed hsl(var(--border) / 0.5);
+    border-radius: 12px;
+    margin: 1rem 0;
+    background: hsl(var(--card) / 0.3);
+}
