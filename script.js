@@ -460,8 +460,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // ─────────────────────────────────────────────────────────
     // Eligibility Chat Logic
     // ─────────────────────────────────────────────────────────
-    const ELIGIBILITY_WEBHOOK = 'http://localhost:8001/proxy?target=eligibility';
-    const OTHER_POLICIES_WEBHOOK = 'http://localhost:8001/proxy?target=other_policies';
+    const ELIGIBILITY_WEBHOOK = '/proxy?target=eligibility';
+    const OTHER_POLICIES_WEBHOOK = '/proxy?target=other_policies';
 
     const chatOverlay = document.getElementById('chat-overlay');
     const chatMessages = document.getElementById('chat-messages');
