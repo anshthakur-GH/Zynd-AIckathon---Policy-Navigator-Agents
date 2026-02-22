@@ -99,7 +99,41 @@
 
     <!-- Eligibility Chat Modal -->
     <div class="chat-overlay hidden" id="chat-overlay">
-        <!-- ... existing chat modal ... -->
+        <div class="chat-modal">
+            <div class="chat-header">
+                <div class="chat-header-info">
+                    <div class="chat-avatar">✦</div>
+                    <div>
+                        <h3>Eligibility Verification</h3>
+                        <p class="chat-status" id="chat-status">AI Agent • Online</p>
+                    </div>
+                </div>
+                <button class="chat-close-btn" id="chat-close-btn">✕</button>
+            </div>
+
+            <div class="chat-messages" id="chat-messages">
+                <!-- Messages will be injected here -->
+            </div>
+
+            <div class="chat-typing hidden" id="chat-typing">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+
+            <div class="chat-input-bar" id="chat-input-bar">
+                <input type="text" id="chat-input" class="chat-input" placeholder="Type your answer..."
+                    autocomplete="off" />
+                <button class="chat-send-btn" id="chat-send-btn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- Scheme Detail Modal -->
